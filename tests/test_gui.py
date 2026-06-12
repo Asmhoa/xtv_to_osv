@@ -11,7 +11,7 @@ from PySide6.QtCore import QMimeData, QUrl
 from PySide6.QtWidgets import QApplication
 
 from xtra_to_osmo.batch import BatchStatus
-from xtra_to_osmo.gui import DropZone, MainWindow
+from xtra_to_osmo.gui import DropZone, MainWindow, main
 
 
 class GuiTests(TestCase):
@@ -107,3 +107,27 @@ class GuiTests(TestCase):
         self.assertFalse(self.window.convert_button.isEnabled())
         self.assertEqual(self.window.convert_button.text(), "Cancelling…")
         self.window._running = False
+
+    def test_environment_smoke_test_constructs_window_and_writes_marker(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            marker = Path(temp_dir) / "smoke.ok"
+            previous_smoke = os.environ.get("XTRA_TO_OSMO_SMOKE_TEST")
+            previous_result = os.environ.get("XTRA_TO_OSMO_SMOKE_RESULT")
+            os.environ["XTRA_TO_OSMO_SMOKE_TEST"] = "1"
+            os.environ["XTRA_TO_OSMO_SMOKE_RESULT"] = str(marker)
+            try:
+                exit_code = main([])
+            finally:
+                if previous_smoke is None:
+                    os.environ.pop("XTRA_TO_OSMO_SMOKE_TEST", None)
+                else:
+                    os.environ["XTRA_TO_OSMO_SMOKE_TEST"] = previous_smoke
+                if previous_result is None:
+                    os.environ.pop("XTRA_TO_OSMO_SMOKE_RESULT", None)
+                else:
+                    os.environ["XTRA_TO_OSMO_SMOKE_RESULT"] = previous_result
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(marker.read_text(encoding="ascii"), "ok\n")

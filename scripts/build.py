@@ -30,13 +30,24 @@ def main() -> int:
         action="store_true",
         help="print the pyside6-deploy command without compiling",
     )
+    parser.add_argument(
+        "--allow-external-vc-runtime",
+        action="store_true",
+        help=(
+            "on Windows, allow an executable that requires the Microsoft "
+            "Visual C++ Redistributable on the target computer"
+        ),
+    )
     args = parser.parse_args()
 
     if sys.version_info[:2] != (3, 12):
         parser.error("Python 3.12 is required for reproducible desktop builds")
 
     if not args.no_bootstrap and not _is_build_environment():
-        return _bootstrap_and_relaunch(args.dry_run)
+        return _bootstrap_and_relaunch(
+            args.dry_run,
+            args.allow_external_vc_runtime,
+        )
 
     deploy = _deploy_executable()
     if not deploy.exists():
@@ -61,10 +72,19 @@ def main() -> int:
     if sys.platform == "win32":
         include_windows_runtime = _activate_windows_toolchain(environment)
         if not include_windows_runtime:
+            if not args.allow_external_vc_runtime:
+                parser.error(
+                    "Visual Studio 2022 Build Tools with the 'Desktop "
+                    "development with C++' workload are required for a "
+                    "self-contained Windows build. Install them, reopen "
+                    "PowerShell, and rerun this command. To intentionally "
+                    "require the VC++ Redistributable on every target, pass "
+                    "--allow-external-vc-runtime."
+                )
             print(
-                "WARNING: Visual Studio 2022 Build Tools were not found. "
-                "The executable will require the Microsoft Visual C++ "
-                "2015-2022 Redistributable on the target computer.",
+                "WARNING: Building without bundled Microsoft runtime DLLs. "
+                "The Microsoft Visual C++ 2015-2022 Redistributable must be "
+                "installed on this and every target computer.",
                 file=sys.stderr,
             )
 
@@ -117,13 +137,47 @@ def smoke_test(artifact: Path) -> None:
         executable = candidates[0]
 
     environment = os.environ.copy()
-    environment.setdefault("QT_QPA_PLATFORM", "offscreen")
-    subprocess.run(
-        [str(executable), "--smoke-test"],
-        check=True,
+    if sys.platform == "win32":
+        environment["QT_QPA_PLATFORM"] = "windows"
+    else:
+        environment.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    version_result = subprocess.run(
+        [str(executable), "--version"],
+        check=False,
         env=environment,
         timeout=30,
+        capture_output=True,
+        text=True,
     )
+    if version_result.returncode:
+        raise RuntimeError(
+            _smoke_failure_message(
+                "packaged executable could not start",
+                version_result,
+            )
+        )
+
+    marker = BUILD_DIR / "smoke-test.ok"
+    marker.unlink(missing_ok=True)
+    environment["XTRA_TO_OSMO_SMOKE_TEST"] = "1"
+    environment["XTRA_TO_OSMO_SMOKE_RESULT"] = str(marker)
+    smoke_result = subprocess.run(
+        [str(executable)],
+        check=False,
+        env=environment,
+        timeout=30,
+        capture_output=True,
+        text=True,
+    )
+    if smoke_result.returncode or not marker.is_file():
+        raise RuntimeError(
+            _smoke_failure_message(
+                "packaged GUI startup smoke test failed",
+                smoke_result,
+            )
+        )
+    marker.unlink(missing_ok=True)
 
 
 def _is_complete_artifact(artifact: Path) -> bool:
@@ -134,6 +188,22 @@ def _is_complete_artifact(artifact: Path) -> bool:
             for path in executable_dir.iterdir()
         )
     return artifact.is_file() and artifact.stat().st_size > 0
+
+
+def _smoke_failure_message(
+    heading: str,
+    result: subprocess.CompletedProcess[str],
+) -> str:
+    details = [
+        f"{heading} with exit code {result.returncode}.",
+        "On Windows, exit code 2 commonly means the Microsoft Visual C++ "
+        "runtime is unavailable.",
+    ]
+    if result.stdout.strip():
+        details.append(f"stdout:\n{result.stdout.strip()}")
+    if result.stderr.strip():
+        details.append(f"stderr:\n{result.stderr.strip()}")
+    return "\n".join(details)
 
 
 def _write_deployment_spec(
@@ -271,7 +341,10 @@ def _set_environment_value(
     environment[name] = value
 
 
-def _bootstrap_and_relaunch(dry_run: bool) -> int:
+def _bootstrap_and_relaunch(
+    dry_run: bool,
+    allow_external_vc_runtime: bool = False,
+) -> int:
     if not BUILD_ENV.exists():
         venv.EnvBuilder(with_pip=True).create(BUILD_ENV)
     python = _environment_python(BUILD_ENV)
@@ -302,6 +375,8 @@ def _bootstrap_and_relaunch(dry_run: bool) -> int:
     command = [str(python), str(Path(__file__).resolve()), "--no-bootstrap"]
     if dry_run:
         command.append("--dry-run")
+    if allow_external_vc_runtime:
+        command.append("--allow-external-vc-runtime")
     return subprocess.run(command, cwd=ROOT).returncode
 
 

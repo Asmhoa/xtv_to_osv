@@ -97,9 +97,18 @@ For a fully self-contained Windows executable, install **Visual Studio 2022
 Build Tools** with the **Desktop development with C++** workload. The build
 script locates it through `vswhere`, activates the x64 developer environment,
 and includes the licensed Microsoft runtime DLLs. Without Build Tools, the
-build still completes but the resulting executable requires the
+build stops before compilation with installation guidance.
+
+To deliberately build an executable that depends on the runtime already being
+installed on every target computer, use:
+
+```powershell
+py -3.12 scripts\build.py --allow-external-vc-runtime
+```
+
+That fallback requires the
 [Microsoft Visual C++ 2015-2022 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
-on the target computer.
+on the build computer and every target computer.
 
 `zstandard` is installed by the build requirements so Nuitka onefile output is
 compressed. A `dumpbin` warning means Visual Studio Build Tools were not

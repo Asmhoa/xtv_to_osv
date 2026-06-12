@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import importlib.util
 from pathlib import Path
+import subprocess
 import tempfile
 from unittest import TestCase
 
@@ -96,3 +97,16 @@ class BuildTests(TestCase):
         build._set_environment_value(environment, "PATH", "updated")
 
         self.assertEqual(environment, {"Path": "updated", "PROGRAMFILES(X86)": "tools"})
+
+    def test_smoke_failure_explains_windows_runtime_exit(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["XtraToOsmo.exe"],
+            2,
+            stdout="",
+            stderr="",
+        )
+
+        message = build._smoke_failure_message("startup failed", result)
+
+        self.assertIn("exit code 2", message)
+        self.assertIn("Visual C++ runtime", message)

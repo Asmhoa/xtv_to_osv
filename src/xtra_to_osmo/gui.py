@@ -918,7 +918,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         print(__version__)
         return 0
-    if args.smoke_test:
+    smoke_test = args.smoke_test or os.environ.get(
+        "XTRA_TO_OSMO_SMOKE_TEST"
+    ) == "1"
+    if smoke_test and sys.platform != "win32":
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -928,7 +931,10 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow()
     if args.files:
         window.add_files(args.files)
-    if args.smoke_test:
+    if smoke_test:
+        result_path = os.environ.get("XTRA_TO_OSMO_SMOKE_RESULT")
+        if result_path:
+            Path(result_path).write_text("ok\n", encoding="ascii")
         window.close()
         return 0
     window.show()
