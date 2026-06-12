@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import struct
@@ -30,7 +31,7 @@ class ConverterTests(TestCase):
             len(source) + 2 * len(DJMD_GMHD_BOX),
         )
         self.assertIn(
-            b"video xtmd payload Osmo 360 /DCIM/CAM_0001_D.OSV",
+            b"video xtmd payload XTRA 360 /DCIM/CAM_0001_D.XTV",
             converted,
         )
         self.assertIn(
@@ -39,6 +40,35 @@ class ConverterTests(TestCase):
         )
         self.assertEqual(converted.count(b"xtmd"), 1)
         self.assertEqual(converted.count(b"djmd"), 4)
+
+    def test_transform_preserves_unmapped_mdat_payload(self) -> None:
+        source = _sample_xtv_bytes()
+
+        converted, _ = transform_xtv_to_osv_bytes(source)
+
+        self.assertEqual(
+            _top_level_payload(converted, "mdat"),
+            _top_level_payload(source, "mdat"),
+        )
+
+    def test_transform_preserves_encoded_media_sample_hashes(self) -> None:
+        source, samples = _sample_xtv_with_sample_tables()
+
+        converted, _ = transform_xtv_to_osv_bytes(source)
+
+        self._assert_sample_integrity(converted, samples)
+
+    def test_file_conversion_preserves_encoded_media_sample_hashes(self) -> None:
+        source, samples = _sample_xtv_with_sample_tables()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "input.XTV"
+            output_path = Path(temp_dir) / "output.OSV"
+            input_path.write_bytes(source)
+
+            convert_xtv_to_osv(input_path, output_path)
+
+            converted = output_path.read_bytes()
+            self._assert_sample_integrity(converted, samples)
 
     def test_transform_rejects_unsupported_container(self) -> None:
         source = _box("ftyp", b"isom") + _box(
@@ -147,6 +177,31 @@ class ConverterTests(TestCase):
             self.assertEqual(payload["output"], str(output_path))
             self.assertEqual(payload["xtmd_entries_converted"], 2)
 
+    def _assert_sample_integrity(
+        self,
+        converted: bytes,
+        samples: dict[str, tuple[int, bytes]],
+    ) -> None:
+        for sample_name in ("video", "audio"):
+            offset, payload = samples[sample_name]
+            converted_payload = converted[offset : offset + len(payload)]
+            self.assertEqual(
+                hashlib.sha256(converted_payload).digest(),
+                hashlib.sha256(payload).digest(),
+                f"{sample_name} sample changed during conversion",
+            )
+
+        for sample_name in ("metadata_1", "metadata_2"):
+            offset, payload = samples[sample_name]
+            converted_payload = converted[offset : offset + len(payload)]
+            self.assertEqual(
+                converted_payload,
+                payload.replace(b"XTRA 360", b"Osmo 360").replace(
+                    b".XTV",
+                    b".OSV",
+                ),
+            )
+
 
 def _sample_xtv_bytes(*, mdat_padding: int = 0) -> bytes:
     mdat_payload = (
@@ -165,6 +220,34 @@ def _sample_xtv_bytes(*, mdat_padding: int = 0) -> bytes:
     )
 
 
+def _sample_xtv_with_sample_tables(
+) -> tuple[bytes, dict[str, tuple[int, bytes]]]:
+    ftyp = _box("ftyp", b"isom\x00\x00\x02\x00isomiso2mp41")
+    payloads = {
+        "video": b"\x00\x00\x01\x26encoded XTRA 360 video .XTV bytes",
+        "audio": b"\xff\xf1encoded XTRA 360 audio .XTV bytes",
+        "metadata_1": b"XTRA 360 metadata path CAM_0001_D.XTV",
+        "metadata_2": b"XTRA 360 metadata path CAM_0001_S.XTV",
+    }
+    mdat_payload = b"".join(payloads.values())
+    payload_offset = len(ftyp) + 8
+    samples: dict[str, tuple[int, bytes]] = {}
+    for name, payload in payloads.items():
+        samples[name] = (payload_offset, payload)
+        payload_offset += len(payload)
+
+    moov_payload = b"".join(
+        (
+            _sample_table_track("hvc1", *samples["video"]),
+            _sample_table_track("mp4a", *samples["audio"]),
+            _sample_table_track("xtmd", *samples["metadata_1"]),
+            _sample_table_track("xtmd", *samples["metadata_2"]),
+        )
+    )
+    source = ftyp + _box("mdat", mdat_payload) + _box("moov", moov_payload)
+    return source, samples
+
+
 def _metadata_track() -> bytes:
     return _box(
         "trak",
@@ -173,6 +256,44 @@ def _metadata_track() -> bytes:
             _box(
                 "minf",
                 _box("dinf", b"url ") + _box("stbl", _stsd("xtmd")),
+            ),
+        ),
+    )
+
+
+def _sample_table_track(
+    entry_type: str,
+    chunk_offset: int,
+    sample_payload: bytes,
+) -> bytes:
+    stsc = _box(
+        "stsc",
+        b"\x00" * 4
+        + struct.pack(">I", 1)
+        + struct.pack(">III", 1, 1, 1),
+    )
+    stsz = _box(
+        "stsz",
+        b"\x00" * 4
+        + struct.pack(">II", 0, 1)
+        + struct.pack(">I", len(sample_payload)),
+    )
+    stco = _box(
+        "stco",
+        b"\x00" * 4
+        + struct.pack(">I", 1)
+        + struct.pack(">I", chunk_offset),
+    )
+    return _box(
+        "trak",
+        _box(
+            "mdia",
+            _box(
+                "minf",
+                _box(
+                    "stbl",
+                    _stsd(entry_type) + stsc + stsz + stco,
+                ),
             ),
         ),
     )
@@ -194,3 +315,13 @@ def _box(box_type: str, payload: bytes) -> bytes:
         struct.pack(">I4s", len(payload) + 8, box_type.encode("ascii"))
         + payload
     )
+
+
+def _top_level_payload(data: bytes, expected_type: str) -> bytes:
+    offset = 0
+    while offset < len(data):
+        size, box_type = struct.unpack_from(">I4s", data, offset)
+        if box_type == expected_type.encode("ascii"):
+            return data[offset + 8 : offset + size]
+        offset += size
+    raise AssertionError(f"missing {expected_type} box")
