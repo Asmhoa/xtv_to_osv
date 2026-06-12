@@ -1,0 +1,5 @@
+setuptools==80.9.0
+wheel==0.45.1
+PySide6==6.11.1
+Send2Trash==2.1.0
+Nuitka==4.0

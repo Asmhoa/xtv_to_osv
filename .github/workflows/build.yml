@@ -1,0 +1,92 @@
+name: Build desktop artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            label: macos-arm64
+          - runner: macos-15-intel
+            label: macos-x64
+          - runner: windows-2022
+            label: windows-x64
+          - runner: ubuntu-22.04
+            label: linux-x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: Install build dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Install project
+        run: python -m pip install --no-build-isolation --no-deps -e .
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build native application
+        run: python scripts/build.py --no-bootstrap
+
+      - name: Sign and notarize macOS application
+        if: runner.os == 'macOS' && env.MACOS_CERTIFICATE != ''
+        run: bash scripts/sign_macos.sh
+
+      - name: Sign Windows executable
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        run: ./scripts/sign_windows.ps1
+
+      - name: Package artifact
+        run: python scripts/package_artifact.py ${{ matrix.label }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtra-to-osmo-${{ matrix.label }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
