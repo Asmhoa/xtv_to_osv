@@ -10,7 +10,7 @@ icon =
 [python]
 
 python_path =
-packages = Nuitka==4.0
+packages = Nuitka==4.0,zstandard==0.23.0
 android_packages = buildozer==1.5.0,cython==0.29.33
 
 [qt]

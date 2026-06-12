@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import os
 from pathlib import Path
 import shutil
@@ -44,24 +45,37 @@ def main() -> int:
             "or install requirements-build.txt"
         )
 
-    BUILD_DIR.mkdir(exist_ok=True)
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
     working_spec = BUILD_DIR / "pysidedeploy.spec"
-    shutil.copyfile(
-        ROOT / "packaging" / "pysidedeploy.spec",
-        working_spec,
-    )
 
     if not args.dry_run and DIST_DIR.exists():
         shutil.rmtree(DIST_DIR)
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
 
-    command = [str(deploy), "--config-file", str(working_spec), "--force"]
-    if args.dry_run:
-        command.append("--dry-run")
     environment = os.environ.copy()
     environment.setdefault(
         "NUITKA_CACHE_DIR",
         str(BUILD_DIR / "nuitka-cache"),
     )
+    include_windows_runtime = False
+    if sys.platform == "win32":
+        include_windows_runtime = _activate_windows_toolchain(environment)
+        if not include_windows_runtime:
+            print(
+                "WARNING: Visual Studio 2022 Build Tools were not found. "
+                "The executable will require the Microsoft Visual C++ "
+                "2015-2022 Redistributable on the target computer.",
+                file=sys.stderr,
+            )
+
+    _write_deployment_spec(
+        working_spec,
+        include_windows_runtime=include_windows_runtime,
+    )
+
+    command = [str(deploy), "--config-file", str(working_spec), "--force"]
+    if args.dry_run:
+        command.append("--dry-run")
     subprocess.run(
         command,
         cwd=BUILD_DIR,
@@ -120,6 +134,141 @@ def _is_complete_artifact(artifact: Path) -> bool:
             for path in executable_dir.iterdir()
         )
     return artifact.is_file() and artifact.stat().st_size > 0
+
+
+def _write_deployment_spec(
+    destination: Path,
+    *,
+    root: Path = ROOT,
+    dist_dir: Path = DIST_DIR,
+    template: Path | None = None,
+    platform: str | None = None,
+    include_windows_runtime: bool = False,
+) -> None:
+    """Create a machine-local spec with absolute, normalized paths."""
+    template = template or root / "packaging" / "pysidedeploy.spec"
+    platform = platform or sys.platform
+    config = configparser.ConfigParser()
+    config.read(template, encoding="utf-8")
+    config["app"]["project_dir"] = str(root.resolve())
+    config["app"]["input_file"] = str((root / "app.py").resolve())
+    config["app"]["exec_directory"] = str(dist_dir.resolve())
+
+    extra_args = config["nuitka"].get("extra_args", "").split()
+    if platform == "win32":
+        extra_args.append("--windows-console-mode=disable")
+        runtime_value = "yes" if include_windows_runtime else "no"
+        extra_args.append(f"--include-windows-runtime-dlls={runtime_value}")
+    config["nuitka"]["extra_args"] = " ".join(dict.fromkeys(extra_args))
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8") as spec:
+        config.write(spec)
+
+
+def _activate_windows_toolchain(environment: dict[str, str]) -> bool:
+    """Add Visual Studio's x64 developer tools to a child environment."""
+    if shutil.which(
+        "dumpbin.exe",
+        path=_environment_value(environment, "PATH"),
+    ):
+        return True
+
+    program_files_x86 = _environment_value(environment, "ProgramFiles(x86)")
+    if not program_files_x86:
+        return False
+    vswhere = (
+        Path(program_files_x86)
+        / "Microsoft Visual Studio"
+        / "Installer"
+        / "vswhere.exe"
+    )
+    if not vswhere.is_file():
+        return False
+
+    try:
+        result = subprocess.run(
+            [
+                str(vswhere),
+                "-latest",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-property",
+                "installationPath",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    installation = result.stdout.strip()
+    if not installation:
+        return False
+
+    developer_command = (
+        Path(installation) / "Common7" / "Tools" / "VsDevCmd.bat"
+    )
+    if not developer_command.is_file():
+        return False
+
+    try:
+        result = subprocess.run(
+            [
+                "cmd.exe",
+                "/d",
+                "/s",
+                "/c",
+                (
+                    f'call "{developer_command}" -no_logo -arch=x64 '
+                    "-host_arch=x64 >nul && set"
+                ),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    for line in result.stdout.splitlines():
+        if "=" not in line or line.startswith("="):
+            continue
+        key, value = line.split("=", 1)
+        _set_environment_value(environment, key, value)
+
+    return (
+        shutil.which(
+            "dumpbin.exe",
+            path=_environment_value(environment, "PATH"),
+        )
+        is not None
+    )
+
+
+def _environment_value(
+    environment: dict[str, str],
+    name: str,
+) -> str | None:
+    for key, value in environment.items():
+        if key.casefold() == name.casefold():
+            return value
+    return None
+
+
+def _set_environment_value(
+    environment: dict[str, str],
+    name: str,
+    value: str,
+) -> None:
+    for key in tuple(environment):
+        if key.casefold() == name.casefold():
+            environment[key] = value
+            return
+    environment[name] = value
 
 
 def _bootstrap_and_relaunch(dry_run: bool) -> int:

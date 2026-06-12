@@ -93,6 +93,18 @@ written to `dist/`:
 - Windows: `XtraToOsmo.exe`
 - Linux: `XtraToOsmo.bin`
 
+For a fully self-contained Windows executable, install **Visual Studio 2022
+Build Tools** with the **Desktop development with C++** workload. The build
+script locates it through `vswhere`, activates the x64 developer environment,
+and includes the licensed Microsoft runtime DLLs. Without Build Tools, the
+build still completes but the resulting executable requires the
+[Microsoft Visual C++ 2015-2022 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
+on the target computer.
+
+`zstandard` is installed by the build requirements so Nuitka onefile output is
+compressed. A `dumpbin` warning means Visual Studio Build Tools were not
+available for Qt's dependency scan; it is not the `dist` output-path failure.
+
 The GitHub Actions workflow builds separate Apple Silicon and Intel macOS apps,
 plus Windows x64 and Ubuntu 22.04-compatible Linux x64 artifacts. Tagged builds
 are attached to a GitHub Release.
