@@ -68,25 +68,16 @@ def main() -> int:
         "NUITKA_CACHE_DIR",
         str(BUILD_DIR / "nuitka-cache"),
     )
-    include_windows_runtime = False
-    if sys.platform == "win32":
-        include_windows_runtime = _activate_windows_toolchain(environment)
-        if not include_windows_runtime:
-            if not args.allow_external_vc_runtime:
-                parser.error(
-                    "Visual Studio 2022 Build Tools with the 'Desktop "
-                    "development with C++' workload are required for a "
-                    "self-contained Windows build. Install them, reopen "
-                    "PowerShell, and rerun this command. To intentionally "
-                    "require the VC++ Redistributable on every target, pass "
-                    "--allow-external-vc-runtime."
-                )
-            print(
-                "WARNING: Building without bundled Microsoft runtime DLLs. "
-                "The Microsoft Visual C++ 2015-2022 Redistributable must be "
-                "installed on this and every target computer.",
-                file=sys.stderr,
-            )
+    include_windows_runtime = (
+        sys.platform == "win32" and not args.allow_external_vc_runtime
+    )
+    if sys.platform == "win32" and args.allow_external_vc_runtime:
+        print(
+            "WARNING: Building without bundled Microsoft runtime DLLs. "
+            "The Microsoft Visual C++ 2015-2022 Redistributable must be "
+            "installed on this and every target computer.",
+            file=sys.stderr,
+        )
 
     _write_deployment_spec(
         working_spec,
@@ -234,111 +225,6 @@ def _write_deployment_spec(
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8") as spec:
         config.write(spec)
-
-
-def _activate_windows_toolchain(environment: dict[str, str]) -> bool:
-    """Add Visual Studio's x64 developer tools to a child environment."""
-    if shutil.which(
-        "dumpbin.exe",
-        path=_environment_value(environment, "PATH"),
-    ):
-        return True
-
-    program_files_x86 = _environment_value(environment, "ProgramFiles(x86)")
-    if not program_files_x86:
-        return False
-    vswhere = (
-        Path(program_files_x86)
-        / "Microsoft Visual Studio"
-        / "Installer"
-        / "vswhere.exe"
-    )
-    if not vswhere.is_file():
-        return False
-
-    try:
-        result = subprocess.run(
-            [
-                str(vswhere),
-                "-latest",
-                "-products",
-                "*",
-                "-requires",
-                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                "-property",
-                "installationPath",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return False
-    installation = result.stdout.strip()
-    if not installation:
-        return False
-
-    developer_command = (
-        Path(installation) / "Common7" / "Tools" / "VsDevCmd.bat"
-    )
-    if not developer_command.is_file():
-        return False
-
-    try:
-        result = subprocess.run(
-            [
-                "cmd.exe",
-                "/d",
-                "/s",
-                "/c",
-                (
-                    f'call "{developer_command}" -no_logo -arch=x64 '
-                    "-host_arch=x64 >nul && set"
-                ),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return False
-    for line in result.stdout.splitlines():
-        if "=" not in line or line.startswith("="):
-            continue
-        key, value = line.split("=", 1)
-        _set_environment_value(environment, key, value)
-
-    return (
-        shutil.which(
-            "dumpbin.exe",
-            path=_environment_value(environment, "PATH"),
-        )
-        is not None
-    )
-
-
-def _environment_value(
-    environment: dict[str, str],
-    name: str,
-) -> str | None:
-    for key, value in environment.items():
-        if key.casefold() == name.casefold():
-            return value
-    return None
-
-
-def _set_environment_value(
-    environment: dict[str, str],
-    name: str,
-    value: str,
-) -> None:
-    for key in tuple(environment):
-        if key.casefold() == name.casefold():
-            environment[key] = value
-            return
-    environment[name] = value
 
 
 def _bootstrap_and_relaunch(

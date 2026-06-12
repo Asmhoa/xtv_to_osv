@@ -82,22 +82,6 @@ class BuildTests(TestCase):
         self.assertIn("zstandard==0.23.0", requirements)
         self.assertIn("zstandard==0.23.0", deployment)
 
-    def test_windows_environment_lookup_is_case_insensitive(self) -> None:
-        environment = {"Path": "initial", "PROGRAMFILES(X86)": "tools"}
-
-        self.assertEqual(
-            build._environment_value(environment, "PATH"),
-            "initial",
-        )
-        self.assertEqual(
-            build._environment_value(environment, "ProgramFiles(x86)"),
-            "tools",
-        )
-
-        build._set_environment_value(environment, "PATH", "updated")
-
-        self.assertEqual(environment, {"Path": "updated", "PROGRAMFILES(X86)": "tools"})
-
     def test_smoke_failure_explains_windows_runtime_exit(self) -> None:
         result = subprocess.CompletedProcess(
             ["XtraToOsmo.exe"],
@@ -110,3 +94,23 @@ class BuildTests(TestCase):
 
         self.assertIn("exit code 2", message)
         self.assertIn("Visual C++ runtime", message)
+
+    def test_deployment_spec_declares_required_qt_plugin_groups(self) -> None:
+        config = configparser.ConfigParser()
+        config.read(
+            ROOT / "packaging" / "pysidedeploy.spec",
+            encoding="utf-8",
+        )
+
+        plugins = set(config["qt"]["plugins"].split(","))
+
+        self.assertEqual(
+            plugins,
+            {
+                "platforms",
+                "styles",
+                "iconengines",
+                "imageformats",
+                "platforminputcontexts",
+            },
+        )

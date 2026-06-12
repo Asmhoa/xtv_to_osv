@@ -95,9 +95,10 @@ written to `dist/`:
 
 For a fully self-contained Windows executable, install **Visual Studio 2022
 Build Tools** with the **Desktop development with C++** workload. The build
-script locates it through `vswhere`, activates the x64 developer environment,
-and includes the licensed Microsoft runtime DLLs. Without Build Tools, the
-build stops before compilation with installation guidance.
+requests that Nuitka include the licensed Microsoft runtime DLLs. Nuitka
+locates the redistributable directly through Visual Studio's `vswhere` and
+`VC\Redist\MSVC` directories; `dumpbin.exe` does not need to be on the current
+PowerShell `PATH`.
 
 To deliberately build an executable that depends on the runtime already being
 installed on every target computer, use:
@@ -111,8 +112,9 @@ That fallback requires the
 on the build computer and every target computer.
 
 `zstandard` is installed by the build requirements so Nuitka onefile output is
-compressed. A `dumpbin` warning means Visual Studio Build Tools were not
-available for Qt's dependency scan; it is not the `dist` output-path failure.
+compressed. The app's Qt modules and plugin groups are explicitly configured,
+so a `dumpbin` warning from `pyside6-deploy` is not used to decide whether the
+Windows runtime can be bundled.
 
 The GitHub Actions workflow builds separate Apple Silicon and Intel macOS apps,
 plus Windows x64 and Ubuntu 22.04-compatible Linux x64 artifacts. Tagged builds
