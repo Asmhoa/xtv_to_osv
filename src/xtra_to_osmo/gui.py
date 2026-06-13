@@ -398,6 +398,28 @@ class MainWindow(QMainWindow):
                 font-weight: 650;
                 margin-right: 4px;
             }
+            QRadioButton {
+                spacing: 6px;
+            }
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+                background: #ffffff;
+                border: 1px solid #8993a4;
+                border-radius: 8px;
+            }
+            QRadioButton::indicator:checked {
+                background: #2f7cf6;
+                border-color: #1f64ca;
+            }
+            QRadioButton::indicator:disabled {
+                background: #eef1f5;
+                border-color: #b9c1cf;
+            }
+            QRadioButton::indicator:checked:disabled {
+                background: #91a8ca;
+                border-color: #7f98bd;
+            }
             QFrame#dropZone {
                 background: #ffffff;
                 border: 2px dashed #b9c1cf;
